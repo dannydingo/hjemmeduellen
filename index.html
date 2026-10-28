@@ -153,14 +153,14 @@ async function load(){
  state.user=user;
 
  const {data:membership,error:memberError}=await supabase
-  .from("household_member").select("household_id")
+  .from("household_members").select("household_id")
   .eq("user_id",user.id).limit(1);
  if(memberError)throw memberError;
  if(!membership?.length)throw Error("Brukeren er ikke tilknyttet en husholdning.");
  state.home=membership[0].household_id;
 
  const [members,tasks,logs]=await Promise.all([
-  supabase.from("household_member").select("*").eq("household_id",state.home),
+  supabase.from("household_members").select("*").eq("household_id",state.home),
   supabase.from("tasks").select("*").eq("household_id",state.home).order("title"),
   supabase.from("task_logs").select("*").eq("household_id",state.home).order("performed_at",{ascending:false}).limit(10000)
  ]);
