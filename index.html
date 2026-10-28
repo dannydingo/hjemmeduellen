@@ -1,0 +1,331 @@
+
+<!DOCTYPE html>
+<html lang="no">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#f7f8fa">
+<title>HjemmeDuellen</title>
+<style>
+:root{font-family:system-ui,-apple-system,sans-serif;color:#182333;background:#f7f8fa}
+*{box-sizing:border-box}
+body{margin:0}
+main{max-width:650px;margin:auto;padding:18px 16px 90px}
+header{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}
+h1{font-size:25px;margin:0}h2{font-size:19px}
+small,.muted{color:#687588}
+.card{background:white;border:1px solid #e4e8ed;border-radius:16px;padding:17px;margin:12px 0}
+button,input,select{font:inherit}
+button{border:0;border-radius:11px;padding:12px 15px;background:#e9edf3;color:#182333;cursor:pointer}
+button.primary{background:#2463d3;color:white}
+button:disabled{opacity:.5}
+input,select{width:100%;padding:12px;border:1px solid #dce1e8;border-radius:10px;background:white;margin:7px 0 12px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.task{min-height:95px;text-align:left;background:#f4f6f9;border:1px solid #e4e8ed}
+.task strong{display:block;margin-bottom:10px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.bar{height:12px;background:#e5e9ee;border-radius:20px;overflow:hidden;display:flex;margin:12px 0}
+.blue{background:#3478d4}.orange{background:#e5a05a}
+.metric{font-size:29px;font-weight:750;margin:8px 0}
+nav{position:fixed;bottom:0;left:0;right:0;background:white;border-top:1px solid #e4e8ed;display:flex;justify-content:center;padding:8px 4px max(8px,env(safe-area-inset-bottom))}
+nav button{flex:1;max-width:160px;font-size:12px;background:white;padding:10px 3px}
+nav button.active{background:#e8effc;color:#195bc1;font-weight:700}
+.hidden{display:none!important}
+.item{border-bottom:1px solid #edf0f3;padding:13px 0}
+.item:last-child{border:0}
+.error{color:#b42318}
+#notice{font-size:13px;margin:8px 0}
+</style>
+</head>
+<body>
+<main>
+<header>
+<div><h1>HjemmeDuellen</h1><small>Oversikt over husarbeidet</small></div>
+<button id="logout" class="hidden">Logg ut</button>
+</header>
+
+<section id="login" class="card">
+<h2>Logg inn</h2>
+<form id="loginForm">
+<label>E-post<input id="email" type="email" required></label>
+<label>Passord<input id="password" type="password" required></label>
+<button class="primary" type="submit">Logg inn</button>
+</form>
+</section>
+
+<div id="app" class="hidden">
+<div id="notice" role="status"></div>
+
+<section id="register">
+<h2>Registrer oppgave</h2>
+<div class="card">
+<label>Hvem utførte oppgaven?</label>
+<select id="person"></select>
+<small>Trykk på en oppgave for å registrere den.</small>
+</div>
+<div id="taskButtons" class="grid"></div>
+</section>
+
+<section id="stats" class="hidden">
+<h2>Statistikk</h2>
+<div class="card">
+<select id="period">
+<option value="week">Uke</option>
+<option value="month">Måned</option>
+<option value="year">År</option>
+</select>
+<div class="row">
+<button id="prev">← Forrige</button>
+<strong id="periodLabel"></strong>
+<button id="next">Neste →</button>
+</div>
+</div>
+<div id="summary"></div>
+<div class="card">
+<h2>Fordeling per oppgave</h2>
+<div id="breakdown"></div>
+</div>
+</section>
+
+<section id="history" class="hidden">
+<h2>Historikk</h2>
+<div id="historyList" class="card"></div>
+</section>
+
+<section id="tasks" class="hidden">
+<h2>Administrer oppgaver</h2>
+<div class="card">
+<form id="taskForm">
+<label>Ny oppgave<input id="newTask" maxlength="80" required placeholder="F.eks. Vaske bilen"></label>
+<button class="primary">Legg til</button>
+</form>
+</div>
+<div id="taskList" class="card"></div>
+</section>
+</div>
+</main>
+
+<nav id="navigation" class="hidden">
+<button data-tab="register" class="active">Registrer</button>
+<button data-tab="stats">Statistikk</button>
+<button data-tab="history">Historikk</button>
+<button data-tab="tasks">Oppgaver</button>
+</nav>
+
+<script type="module">
+import {createClient} from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+
+const supabase=createClient(
+ "https://rqrlnjuumfrwkwjgpabi.supabase.co",
+ "sb_publishable_2GY-Acelp8GqXy1z_uUBHw_hf-zNmN4"
+);
+
+const $=id=>document.getElementById(id);
+const state={user:null,home:null,members:[],tasks:[],logs:[],offset:0};
+const escapeHTML=s=>String(s??"").replace(/[&<>"']/g,c=>({
+ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+}[c]));
+
+function notify(message,error=false){
+ $("notice").textContent=message;
+ $("notice").className=error?"error":"";
+}
+function memberName(id){
+ return state.members.find(m=>m.user_id===id)?.display_name||"Ukjent";
+}
+function taskName(id){
+ return state.tasks.find(t=>t.id===id)?.title||"Slettet oppgave";
+}
+function dateText(d){
+ return new Date(d).toLocaleString("nb-NO",{dateStyle:"medium",timeStyle:"short"});
+}
+function showTab(tab){
+ for(const id of ["register","stats","history","tasks"])
+  $(id).classList.toggle("hidden",id!==tab);
+ document.querySelectorAll("[data-tab]").forEach(b=>
+  b.classList.toggle("active",b.dataset.tab===tab));
+ if(tab==="stats")renderStats();
+}
+
+async function load(){
+ const {data:{user},error:authError}=await supabase.auth.getUser();
+ if(authError||!user){await signedOut();return}
+ state.user=user;
+
+ const {data:membership,error:memberError}=await supabase
+  .from("household_member").select("household_id")
+  .eq("user_id",user.id).limit(1);
+ if(memberError)throw memberError;
+ if(!membership?.length)throw Error("Brukeren er ikke tilknyttet en husholdning.");
+ state.home=membership[0].household_id;
+
+ const [members,tasks,logs]=await Promise.all([
+  supabase.from("household_member").select("*").eq("household_id",state.home),
+  supabase.from("tasks").select("*").eq("household_id",state.home).order("title"),
+  supabase.from("task_logs").select("*").eq("household_id",state.home).order("performed_at",{ascending:false}).limit(10000)
+ ]);
+ for(const result of [members,tasks,logs])if(result.error)throw result.error;
+ state.members=members.data||[];
+ state.tasks=tasks.data||[];
+ state.logs=logs.data||[];
+
+ $("login").classList.add("hidden");
+ $("app").classList.remove("hidden");
+ $("logout").classList.remove("hidden");
+ $("navigation").classList.remove("hidden");
+ render();
+}
+
+async function signedOut(){
+ state.user=null;
+ $("login").classList.remove("hidden");
+ $("app").classList.add("hidden");
+ $("logout").classList.add("hidden");
+ $("navigation").classList.add("hidden");
+}
+
+function render(){
+ const current=$("person").value;
+ $("person").innerHTML=state.members.map(m=>
+  `<option value="${m.user_id}">${escapeHTML(m.display_name)}</option>`).join("");
+ if(state.members.some(m=>m.user_id===current))$("person").value=current;
+ else $("person").value=state.user.id;
+
+ $("taskButtons").innerHTML=state.tasks.filter(t=>t.active).map(t=>
+  `<button class="task" data-log="${t.id}"><strong>${escapeHTML(t.title)}</strong><small>+1 oppgave</small></button>`).join("");
+
+ $("taskList").innerHTML=state.tasks.map(t=>
+  `<div class="item row"><span>${escapeHTML(t.title)} ${t.active?"":"(arkivert)"}</span>
+  <div><button data-edit="${t.id}">Endre</button>
+  <button data-toggle="${t.id}">${t.active?"Arkiver":"Aktiver"}</button></div></div>`).join("")||"Ingen oppgaver";
+
+ $("historyList").innerHTML=state.logs.map(l=>
+  `<div class="item row"><div><strong>${escapeHTML(taskName(l.task_id))}</strong>
+  <div><small>${escapeHTML(memberName(l.performed_by))} · ${dateText(l.performed_at)}</small></div></div>
+  <button data-delete="${l.id}">Slett</button></div>`).join("")||"Ingen registreringer ennå";
+ renderStats();
+}
+
+function periodRange(){
+ const now=new Date(),d=new Date(now.getFullYear(),now.getMonth(),now.getDate());
+ const type=$("period").value;
+ let start,end;
+ if(type==="week"){
+  d.setDate(d.getDate()-((d.getDay()+6)%7)+state.offset*7);
+  start=new Date(d);end=new Date(d);end.setDate(end.getDate()+7);
+ }else if(type==="month"){
+  start=new Date(d.getFullYear(),d.getMonth()+state.offset,1);
+  end=new Date(start.getFullYear(),start.getMonth()+1,1);
+ }else{
+  start=new Date(d.getFullYear()+state.offset,0,1);
+  end=new Date(start.getFullYear()+1,0,1);
+ }
+ return {start,end};
+}
+function renderStats(){
+ if(!state.home)return;
+ const {start,end}=periodRange();
+ $("periodLabel").textContent=start.toLocaleDateString("nb-NO",{day:"numeric",month:"short",year:"numeric"});
+ const filtered=state.logs.filter(l=>{
+  const t=new Date(l.performed_at);
+  return t>=start&&t<end;
+ });
+ const total=filtered.length;
+ const counts=state.members.map(m=>filtered.filter(l=>l.performed_by===m.user_id).length);
+ const percent=total?counts[0]/total*100:50;
+ $("summary").innerHTML=`
+ <div class="grid">${state.members.map((m,i)=>`
+ <div class="card"><small>${escapeHTML(m.display_name)}</small>
+ <div class="metric">${counts[i]}</div><small>oppgaver</small></div>`).join("")}</div>
+ <div class="card"><strong>${total} oppgaver totalt</strong>
+ <div class="bar"><div class="blue" style="width:${total?percent:0}%"></div>
+ <div class="orange" style="width:${total?100-percent:0}%"></div></div>
+ <small>${total?Math.round(percent):0}% / ${total?Math.round(100-percent):0}%</small></div>`;
+ $("breakdown").innerHTML=state.tasks.map(t=>{
+  const matches=filtered.filter(l=>l.task_id===t.id);
+  if(!matches.length)return "";
+  const n=matches.filter(l=>l.performed_by===state.members[0]?.user_id).length;
+  return `<div class="item"><div class="row"><span>${escapeHTML(t.title)}</span><small>${matches.length}</small></div>
+  <div class="bar"><div class="blue" style="width:${n/matches.length*100}%"></div>
+  <div class="orange" style="width:${(matches.length-n)/matches.length*100}%"></div></div></div>`;
+ }).join("")||"Ingen oppgaver i perioden.";
+}
+
+async function refresh(){
+ await load();
+}
+async function perform(taskId){
+ const {error}=await supabase.from("task_logs").insert({
+  household_id:state.home,task_id:taskId,
+  performed_by:$("person").value,
+  logged_by:state.user.id,
+  performed_at:new Date().toISOString()
+ });
+ if(error)throw error;
+ await refresh();
+ notify("Oppgaven er registrert.");
+}
+async function handleAction(event){
+ const b=event.target.closest("button");
+ if(!b)return;
+ try{
+  if(b.dataset.log)await perform(b.dataset.log);
+  if(b.dataset.delete){
+   if(!confirm("Slette registreringen?"))return;
+   const {error}=await supabase.from("task_logs").delete().eq("id",b.dataset.delete);
+   if(error)throw error;
+   await refresh();
+  }
+  if(b.dataset.toggle){
+   const t=state.tasks.find(x=>x.id===b.dataset.toggle);
+   const {error}=await supabase.from("tasks").update({active:!t.active}).eq("id",t.id);
+   if(error)throw error;
+   await refresh();
+  }
+  if(b.dataset.edit){
+   const t=state.tasks.find(x=>x.id===b.dataset.edit);
+   const title=prompt("Nytt oppgavenavn:",t.title)?.trim();
+   if(!title)return;
+   const {error}=await supabase.from("tasks").update({title}).eq("id",t.id);
+   if(error)throw error;
+   await refresh();
+  }
+ }catch(e){notify(e.message,true)}
+}
+document.addEventListener("click",handleAction);
+
+$("loginForm").onsubmit=async e=>{
+ e.preventDefault();
+ const {error}=await supabase.auth.signInWithPassword({
+  email:$("email").value,password:$("password").value
+ });
+ if(error){alert(error.message);return}
+ try{await load()}catch(err){alert(err.message)}
+};
+$("logout").onclick=async()=>{
+ await supabase.auth.signOut();await signedOut();
+};
+$("taskForm").onsubmit=async e=>{
+ e.preventDefault();
+ const title=$("newTask").value.trim();
+ if(!title)return;
+ const {error}=await supabase.from("tasks").insert({
+  household_id:state.home,title,active:true
+ });
+ if(error){notify(error.message,true);return}
+ $("newTask").value="";
+ await refresh();
+};
+document.querySelectorAll("[data-tab]").forEach(b=>
+ b.onclick=()=>showTab(b.dataset.tab));
+$("period").onchange=()=>{state.offset=0;renderStats()};
+$("prev").onclick=()=>{state.offset--;renderStats()};
+$("next").onclick=()=>{state.offset++;renderStats()};
+
+try{await load()}catch(e){
+ console.error(e);
+ notify(e.message,true);
+}
+</script>
+</body>
+</html>
